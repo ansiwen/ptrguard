@@ -22,12 +22,12 @@ func TestUintptrescapes(t *testing.T) {
 		return unsafe.Pointer(&s), &b
 	}
 	for n := 0; n < 100; n++ {
-		p1, p1_done := newPtr()
-		p2, p2_done := newPtr()
+		p1, p1Done := newPtr()
+		p2, p2Done := newPtr()
 		sync := make(syncCh)
 		runtime.GC()
-		assert.False(t, *p1_done)
-		assert.False(t, *p2_done)
+		assert.False(t, *p1Done)
+		assert.False(t, *p2Done)
 		var checkpoint bool
 		go func() {
 			pinUntilRelease(sync, uintptr(p1))
@@ -42,14 +42,14 @@ func TestUintptrescapes(t *testing.T) {
 		assert.Zero(t, p1)
 		assert.Zero(t, p2)
 		runtime.GC()
-		assert.False(t, *p1_done)
-		assert.True(t, *p2_done)
+		assert.False(t, *p1Done)
+		assert.True(t, *p2Done)
 		assert.False(t, checkpoint)
 		sync <- ping
 		<-sync
 		assert.True(t, checkpoint)
-		assert.False(t, *p1_done)
+		assert.False(t, *p1Done)
 		runtime.GC()
-		assert.True(t, *p1_done)
+		assert.True(t, *p1Done)
 	}
 }
