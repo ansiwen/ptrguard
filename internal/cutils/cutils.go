@@ -2,6 +2,9 @@ package cutils
 
 /*
 #include <stdlib.h>
+
+void dummyCall(void* p) {}
+
 */
 import "C"
 import "unsafe"
@@ -12,4 +15,8 @@ func Malloc(n uintptr) unsafe.Pointer {
 
 func Free(p unsafe.Pointer) {
 	C.free(p)
+}
+
+func DummyCCall(p unsafe.Pointer) {
+	C.dummyCall(p)
 }

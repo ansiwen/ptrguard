@@ -46,6 +46,26 @@ func TestPtrGuard(t *testing.T) {
 		assert.Zero(t, *cPtr)
 	})
 
+	t.Run("NoCgoCheck", func(t *testing.T) {
+		s := "string"
+		goPtr := (unsafe.Pointer)(&s)
+		goPtrPtr := (unsafe.Pointer)(&goPtr)
+		assert.PanicsWithError(t,
+			"runtime error: cgo argument has Go pointer to Go pointer",
+			func() {
+				c.DummyCCall(goPtrPtr)
+			},
+			"Please run tests with GODEBUG=cgocheck=2",
+		)
+		assert.NotPanics(t,
+			func() {
+				ptrguard.NoCgoCheck(func() {
+					c.DummyCCall(goPtrPtr)
+				})
+			},
+		)
+	})
+
 	t.Run("stressTest", func(t *testing.T) {
 		// Because the default thread limit of the Go runtime is 10000, creating
 		// 20000 parallel PtrGuards asserts, that Go routines of PtrGuards don't

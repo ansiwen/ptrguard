@@ -6,6 +6,23 @@ import (
 
 var ping struct{}
 
+type dbgVar struct {
+	name  string
+	value *int32
+}
+
+//go:linkname dbgvars runtime.dbgvars
+var dbgvars []dbgVar
+
+var cgocheck = func() *int32 {
+	for i := range dbgvars {
+		if dbgvars[i].name == "cgocheck" {
+			return dbgvars[i].value
+		}
+	}
+	panic("Couln't find cgocheck debug variable")
+}()
+
 type syncCh chan struct{}
 
 // The following code assumes that uintptr has the same size as a pointer,
@@ -68,6 +85,14 @@ func (v *PtrGuard) Release() {
 		v.sync <- ping // Send the "release" signal to the go routine. -->(2)
 		<-v.sync       // wait for Close()
 	}
+}
+
+// NoCgoCheck runs a code block with disabled cgocheck.
+func NoCgoCheck(f func()) {
+	before := *cgocheck
+	*cgocheck = 0
+	f()
+	*cgocheck = before
 }
 
 func uintptrPtr(p *unsafe.Pointer) *uintptr {
