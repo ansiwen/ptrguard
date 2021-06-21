@@ -6,7 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/ansiwen/ptrguard"
-	c "github.com/ansiwen/ptrguard/internal/cutils"
+	c "github.com/ansiwen/ptrguard/internal/test_c_helper"
 	"github.com/stretchr/testify/assert"
 )
 

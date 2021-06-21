@@ -1,4 +1,4 @@
-package cutils
+package test_c_helper
 
 /*
 #include <stdlib.h>
