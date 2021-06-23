@@ -45,7 +45,7 @@ func TestUintptrescapes(t *testing.T) {
 		assert.False(t, *p1Done)
 		assert.True(t, *p2Done)
 		assert.False(t, checkpoint)
-		sync <- ping
+		sync <- signal
 		<-sync
 		assert.True(t, checkpoint)
 		assert.False(t, *p1Done)

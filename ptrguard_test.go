@@ -71,11 +71,11 @@ func TestStressTest(t *testing.T) {
 	// create threads.
 	const N = 20000  // Number of parallel PtrGuards
 	const M = 100000 // Number of loops
-	var ptrGuards [N]*ptrguard.PtrGuard
+	var ptrGuards [N]ptrguard.PinnedPtr
 	cPtrArr := (*[N]unsafe.Pointer)(c.Malloc(N * ptrSize))
 	defer c.Free(unsafe.Pointer(&cPtrArr[0]))
 	toggle := func(i int) {
-		if ptrGuards[i] == nil {
+		if ptrGuards[i] == 0 {
 			goPtr := unsafe.Pointer(&(struct{ byte }{42}))
 			cPtrPtr := unsafe.Pointer(&cPtrArr[i])
 			ptrGuards[i] = ptrguard.Pin(goPtr)
@@ -83,7 +83,7 @@ func TestStressTest(t *testing.T) {
 			assert.Equal(t, (unsafe.Pointer)(cPtrArr[i]), goPtr)
 		} else {
 			ptrGuards[i].Release()
-			ptrGuards[i] = nil
+			ptrGuards[i] = 0
 			assert.Zero(t, cPtrArr[i])
 		}
 	}
@@ -95,9 +95,9 @@ func TestStressTest(t *testing.T) {
 		toggle(i)
 	}
 	for i := range ptrGuards {
-		if ptrGuards[i] != nil {
+		if ptrGuards[i] != 0 {
 			ptrGuards[i].Release()
-			ptrGuards[i] = nil
+			ptrGuards[i] = 0
 		}
 	}
 	for i := uintptr(0); i < N; i++ {
