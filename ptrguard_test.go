@@ -1,7 +1,7 @@
 package ptrguard_test
 
 import (
-	"math/rand"
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -12,45 +12,85 @@ import (
 
 const ptrSize = unsafe.Sizeof(unsafe.Pointer(nil))
 
-func TestPinPokeRelease(t *testing.T) {
-	s := "string"
-	goPtr := (unsafe.Pointer)(&s)
-	cPtrArr := (*[10]unsafe.Pointer)(c.Malloc(ptrSize * 10))
+type tracer struct {
+	p unsafe.Pointer
+	b *bool
+}
+
+func newTracer() tracer {
+	var b bool
+	s := make([]int, 1)
+	runtime.SetFinalizer(&s, func(interface{}) { b = true })
+	return tracer{unsafe.Pointer(&s), &b}
+}
+
+func TestPinPoke(t *testing.T) {
+	tr1 := newTracer()
+	tr2 := newTracer()
+	cPtr := (*unsafe.Pointer)(c.Malloc(ptrSize))
+	defer c.Free(unsafe.Pointer(cPtr))
+	ptrguard.Scope(func(pg ptrguard.Pinner) {
+		pg.Pin(tr1.p).Poke(cPtr)
+		assert.Equal(t, tr1.p, *cPtr)
+		tr1.p = nil
+		tr2.p = nil
+		runtime.GC()
+		runtime.GC()
+		assert.False(t, *tr1.b)
+		assert.True(t, *tr2.b)
+	})
+	runtime.GC()
+	runtime.GC()
+	assert.True(t, *tr1.b)
+	assert.Zero(t, *cPtr)
+}
+
+func TestMultiPoke(t *testing.T) {
+	goPtr := (unsafe.Pointer)(&[1]byte{})
+	cPtrArr := (*[1024]unsafe.Pointer)(c.Malloc(ptrSize * 1024))
 	defer c.Free(unsafe.Pointer(&cPtrArr[0]))
-	pg := ptrguard.Pin(goPtr)
-	for i := range cPtrArr {
-		pg.Poke(&cPtrArr[i])
-	}
-	for i := range cPtrArr {
-		assert.Equal(t, cPtrArr[i], goPtr)
-	}
-	pg.Release()
+	ptrguard.Scope(func(pg ptrguard.Pinner) {
+		pp := pg.Pin(goPtr)
+		for i := range cPtrArr {
+			pp.Poke(&cPtrArr[i])
+		}
+		for i := range cPtrArr {
+			assert.Equal(t, cPtrArr[i], goPtr)
+		}
+	})
 	for i := range cPtrArr {
 		assert.Zero(t, cPtrArr[i])
 	}
 }
 
-func TestMultiRelease(t *testing.T) {
-	s := "string"
-	goPtr := (unsafe.Pointer)(&s)
-	cPtr := (*unsafe.Pointer)(c.Malloc(ptrSize))
-	defer c.Free(unsafe.Pointer(cPtr))
-	pg := ptrguard.Pin(goPtr)
-	pg.Poke(cPtr)
-	assert.Equal(t, *cPtr, goPtr)
-	pg.Release()
-	pg.Release()
-	pg.Release()
-	pg.Release()
-	assert.Zero(t, *cPtr)
+func TestMultiPin(t *testing.T) {
+	var trs [1024]tracer
+	for i := range trs {
+		trs[i] = newTracer()
+	}
+	ptrguard.Scope(func(pg ptrguard.Pinner) {
+		for i := range trs {
+			pg.Pin(trs[i].p)
+			trs[i].p = nil
+		}
+		runtime.GC()
+		runtime.GC()
+		for i := range trs {
+			assert.False(t, *trs[i].b)
+		}
+	})
+	runtime.GC()
+	runtime.GC()
+	for i := range trs {
+		assert.True(t, *trs[i].b)
+	}
 }
 
-func TestNoCgoCheck(t *testing.T) {
+func TestNoCheck(t *testing.T) {
 	s := "string"
 	goPtr := (unsafe.Pointer)(&s)
 	goPtrPtr := (unsafe.Pointer)(&goPtr)
-	assert.PanicsWithError(t,
-		"runtime error: cgo argument has Go pointer to Go pointer",
+	assert.Panics(t,
 		func() {
 			c.DummyCCall(goPtrPtr)
 		},
@@ -58,49 +98,55 @@ func TestNoCgoCheck(t *testing.T) {
 	)
 	assert.NotPanics(t,
 		func() {
-			ptrguard.NoCgoCheck(func() {
-				c.DummyCCall(goPtrPtr)
+			ptrguard.Scope(func(pg ptrguard.Pinner) {
+				pg.NoCheck(func() {
+					c.DummyCCall(goPtrPtr)
+				})
 			})
 		},
 	)
 }
 
-func TestStressTest(t *testing.T) {
-	// Because the default thread limit of the Go runtime is 10000, creating
-	// 20000 parallel PtrGuards asserts, that Go routines of PtrGuards don't
-	// create threads.
-	const N = 20000  // Number of parallel PtrGuards
-	const M = 100000 // Number of loops
-	var ptrGuards [N]ptrguard.PinnedPtr
-	cPtrArr := (*[N]unsafe.Pointer)(c.Malloc(N * ptrSize))
-	defer c.Free(unsafe.Pointer(&cPtrArr[0]))
-	toggle := func(i int) {
-		if ptrGuards[i] == 0 {
-			goPtr := unsafe.Pointer(&(struct{ byte }{42}))
-			cPtrPtr := unsafe.Pointer(&cPtrArr[i])
-			ptrGuards[i] = ptrguard.Pin(goPtr)
-			ptrGuards[i].Poke((*unsafe.Pointer)(cPtrPtr))
-			assert.Equal(t, (unsafe.Pointer)(cPtrArr[i]), goPtr)
-		} else {
-			ptrGuards[i].Release()
-			ptrGuards[i] = 0
-			assert.Zero(t, cPtrArr[i])
-		}
-	}
-	for i := range ptrGuards {
-		toggle(i)
-	}
-	for n := 0; n < M; n++ {
-		i := rand.Intn(N)
-		toggle(i)
-	}
-	for i := range ptrGuards {
-		if ptrGuards[i] != 0 {
-			ptrGuards[i].Release()
-			ptrGuards[i] = 0
-		}
-	}
-	for i := uintptr(0); i < N; i++ {
-		assert.Zero(t, cPtrArr[i])
-	}
+func TestOutOfScopePanics(t *testing.T) {
+	s := "string"
+	goPtr := (unsafe.Pointer)(&s)
+	var goPtrPtr *unsafe.Pointer
+	var pg ptrguard.Pinner
+	var pp ptrguard.PinnedPtr
+	ptrguard.Scope(func(ctx ptrguard.Pinner) {
+		pg = ctx
+		pp = pg.Pin(goPtr)
+	})
+	assert.PanicsWithValue(t,
+		ptrguard.ErrInvalidPinner,
+		func() {
+			pg.Pin(goPtr)
+		},
+	)
+	assert.PanicsWithValue(t,
+		ptrguard.ErrInvalidPinner,
+		func() {
+			pp.Poke(goPtrPtr)
+		},
+	)
+}
+
+func TestUnintializedPanics(t *testing.T) {
+	s := "string"
+	goPtr := (unsafe.Pointer)(&s)
+	var goPtrPtr *unsafe.Pointer
+	var pg ptrguard.Pinner
+	var pp ptrguard.PinnedPtr
+	assert.PanicsWithValue(t,
+		ptrguard.ErrInvalidPinner,
+		func() {
+			pg.Pin(goPtr)
+		},
+	)
+	assert.PanicsWithValue(t,
+		ptrguard.ErrInvalidPinner,
+		func() {
+			pp.Poke(goPtrPtr)
+		},
+	)
 }
