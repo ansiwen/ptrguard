@@ -89,6 +89,29 @@ func TestMultiPin(t *testing.T) {
 	for i := range trs {
 		trs[i] = newTracer()
 	}
+	func() {
+		for i := range trs {
+			defer ptrguard.Pin(trs[i].p).Unpin()
+			trs[i].p = nil
+		}
+		runtime.GC()
+		runtime.GC()
+		for i := range trs {
+			assert.False(t, *trs[i].b)
+		}
+	}()
+	runtime.GC()
+	runtime.GC()
+	for i := range trs {
+		assert.True(t, *trs[i].b)
+	}
+}
+
+func TestScopedMultiPin(t *testing.T) {
+	var trs [1024]tracer
+	for i := range trs {
+		trs[i] = newTracer()
+	}
 	ptrguard.Scope(func(pg ptrguard.Pinner) {
 		for i := range trs {
 			pg.Pin(trs[i].p)
