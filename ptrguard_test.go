@@ -6,7 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/ansiwen/ptrguard"
-	c "github.com/ansiwen/ptrguard/internal/test_c_helper"
+	. "github.com/ansiwen/ptrguard/internal/testhelper"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,8 +27,29 @@ func newTracer() tracer {
 func TestPinPoke(t *testing.T) {
 	tr1 := newTracer()
 	tr2 := newTracer()
-	cPtr := (*unsafe.Pointer)(c.Malloc(ptrSize))
-	defer c.Free(unsafe.Pointer(cPtr))
+	cPtr := (*unsafe.Pointer)(Malloc(ptrSize))
+	defer Free(unsafe.Pointer(cPtr))
+	func() {
+		defer ptrguard.Pin(tr1.p).Poke(cPtr).Unpin()
+		assert.Equal(t, tr1.p, *cPtr)
+		tr1.p = nil
+		tr2.p = nil
+		runtime.GC()
+		runtime.GC()
+		assert.False(t, *tr1.b)
+		assert.True(t, *tr2.b)
+	}()
+	runtime.GC()
+	runtime.GC()
+	assert.True(t, *tr1.b)
+	assert.Zero(t, *cPtr)
+}
+
+func TestScopedPinPoke(t *testing.T) {
+	tr1 := newTracer()
+	tr2 := newTracer()
+	cPtr := (*unsafe.Pointer)(Malloc(ptrSize))
+	defer Free(unsafe.Pointer(cPtr))
 	ptrguard.Scope(func(pg ptrguard.Pinner) {
 		pg.Pin(tr1.p).Poke(cPtr)
 		assert.Equal(t, tr1.p, *cPtr)
@@ -47,8 +68,8 @@ func TestPinPoke(t *testing.T) {
 
 func TestMultiPoke(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&[1]byte{})
-	cPtrArr := (*[1024]unsafe.Pointer)(c.Malloc(ptrSize * 1024))
-	defer c.Free(unsafe.Pointer(&cPtrArr[0]))
+	cPtrArr := (*[1024]unsafe.Pointer)(Malloc(ptrSize * 1024))
+	defer Free(unsafe.Pointer(&cPtrArr[0]))
 	ptrguard.Scope(func(pg ptrguard.Pinner) {
 		pp := pg.Pin(goPtr)
 		for i := range cPtrArr {
@@ -92,15 +113,15 @@ func TestNoCheck(t *testing.T) {
 	goPtrPtr := (unsafe.Pointer)(&goPtr)
 	assert.Panics(t,
 		func() {
-			c.DummyCCall(goPtrPtr)
+			DummyCCall(goPtrPtr)
 		},
 		"Please run tests with GODEBUG=cgocheck=2",
 	)
 	assert.NotPanics(t,
 		func() {
 			ptrguard.Scope(func(pg ptrguard.Pinner) {
-				pg.NoCheck(func() {
-					c.DummyCCall(goPtrPtr)
+				ptrguard.NoCheck(func() {
+					DummyCCall(goPtrPtr)
 				})
 			})
 		},
@@ -112,7 +133,7 @@ func TestOutOfScopePanics(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pg ptrguard.Pinner
-	var pp ptrguard.PinnedPtr
+	var pp ptrguard.ScopedPinnedPtr
 	ptrguard.Scope(func(ctx ptrguard.Pinner) {
 		pg = ctx
 		pp = pg.Pin(goPtr)
@@ -136,7 +157,7 @@ func TestUnintializedPanics(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pg ptrguard.Pinner
-	var pp ptrguard.PinnedPtr
+	var pp ptrguard.ScopedPinnedPtr
 	assert.PanicsWithValue(t,
 		ptrguard.ErrInvalidPinner,
 		func() {

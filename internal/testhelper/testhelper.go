@@ -1,4 +1,5 @@
-package test_c_helper //nolint
+// cgo test helper
+package testhelper
 
 /*
 #include <stdlib.h>

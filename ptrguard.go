@@ -16,10 +16,10 @@ type Pinner struct {
 	*ctxData
 }
 
-// PinnedPtr is returned by Pin() and represents a pinned Go pointer (pointing
-// to memory allocated by Go runtime) which can be stored in C memory (allocated
-// by malloc) with the Poke() method.
-type PinnedPtr struct {
+// ScopedPinnedPtr represents a scoped pinned Go pointer (pointing to memory
+// allocated by Go runtime) which can be stored in C memory (allocated by
+// malloc) with the Poke() method and will be unpinned when the scope is left.
+type ScopedPinnedPtr struct {
 	ptr    uintptr
 	pinner Pinner
 }
@@ -28,7 +28,7 @@ type PinnedPtr struct {
 // Pinner context. After the function returned it unpins all pinned pointers and
 // resets all poked memory of that Pinner context to nil.
 func Scope(f func(Pinner)) {
-	ctx := ctxData{}
+	var ctx ctxData
 	ctx.release.Lock()
 	f(Pinner{&ctx})
 	ctx.clear()
@@ -41,7 +41,7 @@ func Scope(f func(Pinner)) {
 // functions, which usually violates the pointer passing rules[1].
 //
 // [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
-func (pinner Pinner) Pin(ptr unsafe.Pointer) PinnedPtr {
+func (pinner Pinner) Pin(ptr unsafe.Pointer) ScopedPinnedPtr {
 	pinner.check()
 	var pinned sync.Mutex
 	pinned.Lock()
@@ -55,16 +55,47 @@ func (pinner Pinner) Pin(ptr unsafe.Pointer) PinnedPtr {
 		pinner.wg.Done()
 	}()
 	pinned.Lock() // Wait for the "pinned" signal from the go routine <--(1)
-	return PinnedPtr{uintptr(ptr), pinner}
+	return ScopedPinnedPtr{uintptr(ptr), pinner}
 }
 
 // Poke stores the pinned pointer at target, which can be C memory. Target will
 // be set to nil when the pointer is unpinned.
-func (pinned PinnedPtr) Poke(target *unsafe.Pointer) {
+func (pinned ScopedPinnedPtr) Poke(target *unsafe.Pointer) ScopedPinnedPtr {
 	pinned.pinner.check()
 	p := uintptrPtr(target)
 	pinned.pinner.refs = append(pinned.pinner.refs, p)
 	*p = uintptr(pinned.ptr)
+	return pinned
+}
+
+// PinnedPtr represents a pinned Go pointer (pointing to memory allocated by Go
+// runtime) which can be stored in C memory (allocated by malloc) with the
+// Poke() method and unpinned with the Unpin() method.
+type PinnedPtr ScopedPinnedPtr
+
+// Pin pins a Go pointer and returns a PinnedPtr. The pointer will not be
+// touched by the garbage collector until Unpin() is called. Therefore it can be
+// directly stored in C memory with the Poke() method or can be contained in Go
+// memory passed to C functions, which usually violates the pointer passing
+// rules[1].
+//
+// [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
+func Pin(ptr unsafe.Pointer) PinnedPtr {
+	var ctx ctxData
+	ctx.release.Lock()
+	return PinnedPtr(Pinner{&ctx}.Pin(ptr))
+}
+
+// Poke stores the pinned pointer at target, which can be C memory. Target will
+// be set to nil when the pointer is unpinned.
+func (pinned PinnedPtr) Poke(target *unsafe.Pointer) PinnedPtr {
+	return PinnedPtr(ScopedPinnedPtr(pinned).Poke(target))
+}
+
+// Unpin unpins the pinned pointer and resets all poked memory of that pinned
+// pointer context to nil.
+func (pinned PinnedPtr) Unpin() {
+	pinned.pinner.ctxData.clear()
 }
 
 // NoCheck temporarily disables cgocheck in order to pass Go memory containing
@@ -74,8 +105,7 @@ func (pinned PinnedPtr) Poke(target *unsafe.Pointer) {
 // to shadow the cgocheck call instead with this code line
 //   _cgoCheckPointer := func(interface{}, interface{}) {}
 // right before the C function call.
-func (pinner Pinner) NoCheck(f func()) {
-	pinner.check()
+func NoCheck(f func()) {
 	cgocheckOld := atomic.SwapInt32(cgocheck, 0)
 	f()
 	atomic.StoreInt32(cgocheck, cgocheckOld)
