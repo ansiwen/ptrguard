@@ -1,15 +1,19 @@
 # PtrGuard
 PtrGuard is a small Go package that allows to pin a Go pointer (that is pointing
-to memory allocated by the Go runtime) within a `Scope()`. The scope provides a
-`Pinner` which can pin a Go pointer with the `Pin()` method, so that the pointer
-will not be touched by the garbage collector until the scope is left. Therefore
-the pinned Go pointer can either be directly stored in C memory with the
-`Poke()` method, or is allowed to be contained in Go memory that is passed to C
+to memory allocated by the Go runtime) so that it will not be touched by the
+garbage collector. This can be either done directly with the `Pin()` function,
+in which case the pointer will be pinned, until the `Unpin()` method of the
+returned object is called. Alternatively a `Scope()` can be created, which
+provides a `Pinner` context with a `Pin()` method. In this case the pointer is
+pinned until the scope is left.
+
+Pinned Go pointers can either be directly stored in C memory with the `Poke()`
+method, or are allowed to be contained in Go memory that is passed to C
 functions, which both usually violates the [pointer passing
 rules](https://golang.org/cmd/cgo/#hdr-Passing_pointers). In the second case you
-might need the `NoCheck()` method to call the C function in a context, where the
-cgocheck debug feature is disabled, because PtrGuard doesn't have any
-possibility so far to tell cgocheck, that certain pointers are pinned.
+might need the `NoCheck()` helper function to call the C function in a context,
+where the cgocheck debug feature is disabled. This is necessary because PtrGuard
+doesn't have any possibility to tell cgocheck, that certain pointers are pinned.
 
 ## Example
 Let's say we want to use a C API that uses [vectored
@@ -29,6 +33,29 @@ buffers. The pointer passing rules wouldn't allow that, because
 With PtrGuard both is still possible:
 
 ### Allocating the buffer array in C memory
+
+#### direct API
+
+```go
+func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
+	numberOfBuffers := len(bufferArray)
+
+	cPtr := C.malloc(C.size_t(C.sizeof_struct_iovec * numberOfBuffers))
+	defer C.free(cPtr)
+	iovec := (*[math.MaxInt32]C.struct_iovec)(cPtr)[:numberOfBuffers:numberOfBuffers]
+
+	var n C.ssize_t
+	for i := range iovec {
+		bufferPtr := unsafe.Pointer(&bufferArray[i][0])
+		defer ptrguard.Pin(bufferPtr).Poke(&iovec[i].iov_base).Unpin()
+		iovec[i].iov_len = C.size_t(len(bufferArray[i]))
+	}
+	n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
+	return int(n)
+}
+```
+
+#### scoped API
 
 ```go
 func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
@@ -52,6 +79,30 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 ```
 
 ### Allocating the buffer array in Go memory
+
+#### direct API
+
+```go
+func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
+	numberOfBuffers := len(bufferArray)
+
+	iovec := make([]C.struct_iovec, numberOfBuffers)
+
+	var n C.ssize_t
+	for i := range iovec {
+		bufferPtr := unsafe.Pointer(&bufferArray[i][0])
+		defer ptrguard.Pin(bufferPtr).Unpin()
+		iovec[i].iov_base = bufferPtr
+		iovec[i].iov_len = C.size_t(len(bufferArray[i]))
+	}
+	ptrguard.NoCheck(func() {
+		n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
+	})
+	return int(n)
+}
+```
+
+#### scoped API
 
 ```go
 func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
