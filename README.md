@@ -3,9 +3,9 @@ PtrGuard is a small Go package that allows to pin a Go pointer (that is pointing
 to memory allocated by the Go runtime) so that it will not be touched by the
 garbage collector. This can be either done directly with the `Pin()` function,
 in which case the pointer will be pinned, until the `Unpin()` method of the
-returned object is called. Alternatively a `Scope()` can be created, which
-provides a `Pinner` context with a `Pin()` method. In this case the pointer is
-pinned until the scope is left.
+returned value is called. Alternatively a `Scope()` can be created, which
+provides a `Pinner` function. In this case the pointer is pinned until the scope
+is left.
 
 Pinned Go pointers can either be directly stored in C memory with the `Poke()`
 method, or are allowed to be contained in Go memory that is passed to C
@@ -66,10 +66,10 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 	iovec := (*[math.MaxInt32]C.struct_iovec)(cPtr)[:numberOfBuffers:numberOfBuffers]
 
 	var n C.ssize_t
-	ptrguard.Scope(func(pg ptrguard.Pinner) {
+	ptrguard.Scope(func(pin ptrguard.Pinner) {
 		for i := range iovec {
 			bufferPtr := unsafe.Pointer(&bufferArray[i][0])
-			pg.Pin(bufferPtr).Poke(&iovec[i].iov_base)
+			pin(bufferPtr).Poke(&iovec[i].iov_base)
 			iovec[i].iov_len = C.size_t(len(bufferArray[i]))
 		}
 		n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
@@ -111,10 +111,10 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 	iovec := make([]C.struct_iovec, numberOfBuffers)
 
 	var n C.ssize_t
-	ptrguard.Scope(func(pg ptrguard.Pinner) {
+	ptrguard.Scope(func(pin ptrguard.Pinner) {
 		for i := range iovec {
 			bufferPtr := unsafe.Pointer(&bufferArray[i][0])
-			pg.Pin(bufferPtr)
+			pin(bufferPtr)
 			iovec[i].iov_base = bufferPtr
 			iovec[i].iov_len = C.size_t(len(bufferArray[i]))
 		}

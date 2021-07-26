@@ -63,52 +63,50 @@ func (p *PinnedPtr) Unpin() {
 	p.pinned.Lock()    // wait for "released" signal.
 }
 
-// Pinner is a PtrGuard scope context created by Scope() that can be used to pin
-// Go pointers
-type Pinner struct {
-	*pinnerData
-}
+// Pinner pins a Go pointer within the PtrGuard scope of pinner and returns a
+// ScopedPinnedPtr. The pointer will not be touched by the garbage collector
+// until the end of the PtrGuard scope. Therefore it can be directly stored in C
+// memory with the Poke() method or can be contained in Go memory passed to C
+// functions, which usually violates the pointer passing rules[1].
+//
+// [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
+type Pinner func(ptr unsafe.Pointer) ScopedPinnedPtr
 
 // ScopedPinnedPtr represents a scoped pinned Go pointer (pointing to memory
 // allocated by Go runtime) which can be stored in C memory (allocated by
 // malloc) with the Poke() method and will be unpinned when the scope is left.
 type ScopedPinnedPtr struct {
 	ptr    uintptr
-	pinner Pinner
+	pinner *pinnerData
 }
 
 // Scope creates a PtrGuard scope by calling the provided function with a
-// Pinner context. After the function returned it unpins all pinned pointers and
+// Pinner. After the function has returned it unpins all pinned pointers and
 // resets all poked memory of that Pinner context to nil.
 func Scope(f func(Pinner)) {
 	var pinner pinnerData
 	pinner.release.Lock()
-	f(Pinner{&pinner})
+	f(makePinner(&pinner))
 	pinner.unpin()
 }
 
-// Pin pins a Go pointer within the PtrGuard scope of pinner and returns a
-// PinnedPtr. The pointer will not be touched by the garbage collector until the
-// end of the PtrGuard scope. Therefore it can be directly stored in C memory
-// with the Poke() method or can be contained in Go memory passed to C
-// functions, which usually violates the pointer passing rules[1].
-//
-// [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
-func (v Pinner) Pin(ptr unsafe.Pointer) ScopedPinnedPtr {
-	v.check()
-	var pinned sync.Mutex
-	pinned.Lock()
-	// Start a background go routine that lives until Release() is called. This
-	// calls a special function that makes sure the garbage collector doesn't
-	// touch ptr and then waits until it receives the "release" signal, after
-	// which it exits.
-	v.wg.Add(1)
-	go func() {
-		pinUntilRelease2(&pinned, &v.release, uintptr(ptr))
-		v.wg.Done()
-	}()
-	pinned.Lock() // wait for the "pinned" signal from the go routine.
-	return ScopedPinnedPtr{uintptr(ptr), v}
+func makePinner(pinner *pinnerData) Pinner {
+	return func(ptr unsafe.Pointer) ScopedPinnedPtr {
+		pinner.check()
+		var pinned sync.Mutex
+		pinned.Lock()
+		// Start a background go routine that lives until Release() is called. This
+		// calls a special function that makes sure the garbage collector doesn't
+		// touch ptr and then waits until it receives the "release" signal, after
+		// which it exits.
+		pinner.wg.Add(1)
+		go func() {
+			pinUntilRelease2(&pinned, &pinner.release, uintptr(ptr))
+			pinner.wg.Done()
+		}()
+		pinned.Lock() // wait for the "pinned" signal from the go routine.
+		return ScopedPinnedPtr{uintptr(ptr), pinner}
+	}
 }
 
 // Poke stores the pinned pointer at target, which can be C memory. Target will

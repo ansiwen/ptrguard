@@ -50,8 +50,8 @@ func TestScopedPinPoke(t *testing.T) {
 	tr2 := newTracer()
 	cPtr := (*unsafe.Pointer)(Malloc(ptrSize))
 	defer Free(unsafe.Pointer(cPtr))
-	ptrguard.Scope(func(pg ptrguard.Pinner) {
-		pg.Pin(tr1.p).Poke(cPtr)
+	ptrguard.Scope(func(pin ptrguard.Pinner) {
+		pin(tr1.p).Poke(cPtr)
 		assert.Equal(t, tr1.p, *cPtr)
 		tr1.p = nil
 		tr2.p = nil
@@ -113,9 +113,9 @@ func TestScopedMultiPin(t *testing.T) {
 	for i := range trs {
 		trs[i] = newTracer()
 	}
-	ptrguard.Scope(func(pg ptrguard.Pinner) {
+	ptrguard.Scope(func(pin ptrguard.Pinner) {
 		for i := range trs {
-			pg.Pin(trs[i].p)
+			pin(trs[i].p)
 			trs[i].p = nil
 		}
 		runtime.GC()
@@ -154,16 +154,16 @@ func TestOutOfScopePanics(t *testing.T) {
 	s := "string"
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
-	var pg ptrguard.Pinner
+	var pin ptrguard.Pinner
 	var pp ptrguard.ScopedPinnedPtr
-	ptrguard.Scope(func(ctx ptrguard.Pinner) {
-		pg = ctx
-		pp = pg.Pin(goPtr)
+	ptrguard.Scope(func(pin_ ptrguard.Pinner) {
+		pin = pin_
+		pp = pin_(goPtr)
 	})
 	assert.PanicsWithValue(t,
 		ptrguard.ErrInvalidPinner,
 		func() {
-			pg.Pin(goPtr)
+			pin(goPtr)
 		},
 	)
 	assert.PanicsWithValue(t,
@@ -178,12 +178,12 @@ func TestUnintializedPanics(t *testing.T) {
 	s := "string"
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
-	var pg ptrguard.Pinner
+	var pin ptrguard.Pinner
 	var pp ptrguard.PinnedPtr
 	var spp ptrguard.ScopedPinnedPtr
 	assert.Panics(t,
 		func() {
-			pg.Pin(goPtr)
+			pin(goPtr)
 		},
 	)
 	assert.Panics(t,
