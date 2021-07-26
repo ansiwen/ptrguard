@@ -70,15 +70,16 @@ func TestMultiPoke(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&[1]byte{})
 	cPtrArr := (*[1024]unsafe.Pointer)(Malloc(ptrSize * 1024))
 	defer Free(unsafe.Pointer(&cPtrArr[0]))
-	ptrguard.Scope(func(pg ptrguard.Pinner) {
-		pp := pg.Pin(goPtr)
+	func() {
+		pp := ptrguard.Pin(goPtr)
+		defer pp.Unpin()
 		for i := range cPtrArr {
 			pp.Poke(&cPtrArr[i])
 		}
 		for i := range cPtrArr {
 			assert.Equal(t, cPtrArr[i], goPtr)
 		}
-	})
+	}()
 	for i := range cPtrArr {
 		assert.Zero(t, cPtrArr[i])
 	}
@@ -142,10 +143,8 @@ func TestNoCheck(t *testing.T) {
 	)
 	assert.NotPanics(t,
 		func() {
-			ptrguard.Scope(func(pg ptrguard.Pinner) {
-				ptrguard.NoCheck(func() {
-					DummyCCall(goPtrPtr)
-				})
+			ptrguard.NoCheck(func() {
+				DummyCCall(goPtrPtr)
 			})
 		},
 	)
@@ -180,17 +179,26 @@ func TestUnintializedPanics(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pg ptrguard.Pinner
-	var pp ptrguard.ScopedPinnedPtr
-	assert.PanicsWithValue(t,
-		ptrguard.ErrInvalidPinner,
+	var pp ptrguard.PinnedPtr
+	var spp ptrguard.ScopedPinnedPtr
+	assert.Panics(t,
 		func() {
 			pg.Pin(goPtr)
 		},
 	)
-	assert.PanicsWithValue(t,
-		ptrguard.ErrInvalidPinner,
+	assert.Panics(t,
 		func() {
 			pp.Poke(goPtrPtr)
+		},
+	)
+	assert.Panics(t,
+		func() {
+			pp.Unpin()
+		},
+	)
+	assert.Panics(t,
+		func() {
+			spp.Poke(goPtrPtr)
 		},
 	)
 }
