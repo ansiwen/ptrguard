@@ -45,7 +45,7 @@ func TestPinPoke(t *testing.T) {
 	assert.Zero(t, *cPtr)
 }
 
-func TestScopedPinPoke(t *testing.T) {
+func TestScopePinPoke(t *testing.T) {
 	tr1 := newTracer()
 	tr2 := newTracer()
 	cPtr := (*unsafe.Pointer)(Malloc(ptrSize))
@@ -108,7 +108,7 @@ func TestMultiPin(t *testing.T) {
 	}
 }
 
-func TestScopedMultiPin(t *testing.T) {
+func TestScopeMultiPin(t *testing.T) {
 	var trs [1024]tracer
 	for i := range trs {
 		trs[i] = newTracer()
@@ -155,19 +155,17 @@ func TestOutOfScopePanics(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pin ptrguard.Pinner
-	var pp ptrguard.ScopedPinnedPtr
+	var pp ptrguard.ScopePtr
 	ptrguard.Scope(func(pin_ ptrguard.Pinner) {
 		pin = pin_
 		pp = pin_(goPtr)
 	})
-	assert.PanicsWithValue(t,
-		ptrguard.ErrInvalidPinner,
+	assert.Panics(t,
 		func() {
 			pin(goPtr)
 		},
 	)
-	assert.PanicsWithValue(t,
-		ptrguard.ErrInvalidPinner,
+	assert.Panics(t,
 		func() {
 			pp.Poke(goPtrPtr)
 		},
@@ -179,8 +177,8 @@ func TestUnintializedPanics(t *testing.T) {
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pin ptrguard.Pinner
-	var pp ptrguard.PinnedPtr
-	var spp ptrguard.ScopedPinnedPtr
+	var pp ptrguard.Ptr
+	var spp ptrguard.ScopePtr
 	assert.Panics(t,
 		func() {
 			pin(goPtr)

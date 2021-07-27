@@ -55,7 +55,7 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 }
 ```
 
-#### scoped API
+#### scope API
 
 ```go
 func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
@@ -102,7 +102,7 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 }
 ```
 
-#### scoped API
+#### scope API
 
 ```go
 func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {

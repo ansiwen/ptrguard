@@ -4,35 +4,30 @@
 package ptrguard
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
-// PinnedPtr represents a pinned Go pointer (pointing to memory allocated by Go
+// Ptr represents a pinned Go pointer (pointing to memory allocated by Go
 // runtime) which can be stored in C memory (allocated by malloc) with the
-// Poke() method and unpinned with the Unpin() method.
-type PinnedPtr struct {
-	ptr     uintptr
-	release sync.Mutex
-	pinned  sync.Mutex
-	refsType
-	finishedType
+// `Poke()` method and unpinned with the `Unpin()` method.
+type Ptr struct {
+	*ptrData
 }
 
-// Pin pins a Go pointer and returns a PinnedPtr. The pointer will not be
-// touched by the garbage collector until Unpin() is called. Therefore it can be
-// directly stored in C memory with the Poke() method or can be contained in Go
-// memory passed to C functions, which usually violates the pointer passing
-// rules[1].
+// Pin pins a Go pointer and returns a Ptr value. The pointer will not be
+// touched by the garbage collector until `Unpin()` is called. Therefore it can
+// be directly stored in C memory with the `Poke()` method or can be contained
+// in Go memory passed to C functions, which usually violates the pointer
+// passing rules[1].
 //
 // [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
-func Pin(ptr unsafe.Pointer) *PinnedPtr {
-	var p PinnedPtr
+func Pin(ptr unsafe.Pointer) Ptr {
+	var p ptrData
 	p.release.Lock()
 	p.pinned.Lock()
-	// Start a background go routine that lives until Release() is called. This
+	// Start a background go routine that lives until Unpin() is called. This
 	// calls a special function that makes sure the garbage collector doesn't
 	// touch ptr and then waits until it receives the "release" signal, after
 	// which it exits.
@@ -42,46 +37,46 @@ func Pin(ptr unsafe.Pointer) *PinnedPtr {
 	}()
 	p.pinned.Lock() // wait for the "pinned" signal from the go routine.
 	p.ptr = uintptr(ptr)
-	return &p
+	return Ptr{&p}
 }
 
-// Poke stores the pinned pointer at target, which can be C memory. Target will
-// be set to nil when the pointer is unpinned.
-func (p *PinnedPtr) Poke(target *unsafe.Pointer) *PinnedPtr {
-	p.check()
-	p.poke(p.ptr, target)
-	return p
+// Poke stores the pinned pointer at the target address, which can be C memory.
+// The memory at target will be set to nil when the pointer is unpinned.
+func (v Ptr) Poke(target *unsafe.Pointer) Ptr {
+	v.check()
+	v.poke(v.ptr, target)
+	return v
 }
 
-// Unpin unpins the pinned pointer and resets all poked memory of that pinned
-// pointer context to nil.
-func (p *PinnedPtr) Unpin() {
-	p.check()
-	p.finished = true
-	p.clear()
-	p.release.Unlock() // send "release" signal to go routine.
-	p.pinned.Lock()    // wait for "released" signal.
+// Unpin unpins the pinned pointer and resets all poked memory with that pinned
+// pointer to nil.
+func (v Ptr) Unpin() {
+	v.check()
+	v.finished = true
+	v.clear()
+	v.release.Unlock() // send "release" signal to go routine.
+	v.pinned.Lock()    // wait for "released" signal.
 }
 
-// Pinner pins a Go pointer within the PtrGuard scope of pinner and returns a
-// ScopedPinnedPtr. The pointer will not be touched by the garbage collector
-// until the end of the PtrGuard scope. Therefore it can be directly stored in C
-// memory with the Poke() method or can be contained in Go memory passed to C
-// functions, which usually violates the pointer passing rules[1].
+// Pinner pins a Go pointer within the PtrGuard scope and returns a ScopePtr
+// value. The pointer will not be touched by the garbage collector until the end
+// of the PtrGuard scope. Therefore it can be directly stored in C memory with
+// the `Poke()` method or can be contained in Go memory passed to C functions,
+// which usually violates the pointer passing rules[1].
 //
 // [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
-type Pinner func(ptr unsafe.Pointer) ScopedPinnedPtr
+type Pinner func(ptr unsafe.Pointer) ScopePtr
 
-// ScopedPinnedPtr represents a scoped pinned Go pointer (pointing to memory
-// allocated by Go runtime) which can be stored in C memory (allocated by
-// malloc) with the Poke() method and will be unpinned when the scope is left.
-type ScopedPinnedPtr struct {
+// ScopePtr represents a pinned Go pointer (pointing to memory allocated by Go
+// runtime) within a scope which can be stored in C memory (allocated by malloc)
+// with the `Poke()` method and will be unpinned when the scope is left.
+type ScopePtr struct {
 	ptr    uintptr
 	pinner *pinnerData
 }
 
 // Scope creates a PtrGuard scope by calling the provided function with a
-// Pinner. After the function has returned it unpins all pinned pointers and
+// `Pinner`. After the function has returned it unpins all pinned pointers and
 // resets all poked memory of that Pinner context to nil.
 func Scope(f func(Pinner)) {
 	var pinner pinnerData
@@ -90,31 +85,12 @@ func Scope(f func(Pinner)) {
 	pinner.unpin()
 }
 
-func makePinner(pinner *pinnerData) Pinner {
-	return func(ptr unsafe.Pointer) ScopedPinnedPtr {
-		pinner.check()
-		var pinned sync.Mutex
-		pinned.Lock()
-		// Start a background go routine that lives until Release() is called. This
-		// calls a special function that makes sure the garbage collector doesn't
-		// touch ptr and then waits until it receives the "release" signal, after
-		// which it exits.
-		pinner.wg.Add(1)
-		go func() {
-			pinUntilRelease2(&pinned, &pinner.release, uintptr(ptr))
-			pinner.wg.Done()
-		}()
-		pinned.Lock() // wait for the "pinned" signal from the go routine.
-		return ScopedPinnedPtr{uintptr(ptr), pinner}
-	}
-}
-
 // Poke stores the pinned pointer at target, which can be C memory. Target will
 // be set to nil when the pointer is unpinned.
-func (pinned ScopedPinnedPtr) Poke(target *unsafe.Pointer) ScopedPinnedPtr {
-	pinned.pinner.check()
-	pinned.pinner.poke(pinned.ptr, target)
-	return pinned
+func (v ScopePtr) Poke(target *unsafe.Pointer) ScopePtr {
+	v.pinner.check()
+	v.pinner.poke(v.ptr, target)
+	return v
 }
 
 // NoCheck temporarily disables cgocheck in order to pass Go memory containing
@@ -130,14 +106,38 @@ func NoCheck(f func()) {
 	atomic.StoreInt32(cgocheck, cgocheckOld)
 }
 
-// ErrInvalidPinner is thrown when invalid Pinners are accessed.
-var ErrInvalidPinner = errors.New("access to invalid PtrGuard context")
+type ptrData struct {
+	ptr     uintptr
+	release sync.Mutex
+	pinned  sync.Mutex
+	refsType
+	finishedType
+}
 
 type pinnerData struct {
 	release sync.RWMutex
 	wg      sync.WaitGroup
 	refsType
 	finishedType
+}
+
+func makePinner(pinner *pinnerData) Pinner {
+	return func(ptr unsafe.Pointer) ScopePtr {
+		pinner.check()
+		var pinned sync.Mutex
+		pinned.Lock()
+		// Start a background go routine that lives until unpin() is called. This
+		// calls a special function that makes sure the garbage collector doesn't
+		// touch ptr and then waits until it receives the "release" signal, after
+		// which it exits.
+		pinner.wg.Add(1)
+		go func() {
+			pinUntilRelease2(&pinned, &pinner.release, uintptr(ptr))
+			pinner.wg.Done()
+		}()
+		pinned.Lock() // wait for the "pinned" signal from the go routine.
+		return ScopePtr{uintptr(ptr), pinner}
+	}
 }
 
 func (v *pinnerData) unpin() {
@@ -153,8 +153,8 @@ type finishedType struct {
 }
 
 func (v *finishedType) check() {
-	if v.finished {
-		panic(ErrInvalidPinner)
+	if v == nil || v.finished {
+		panic("access to invalid PtrGuard context")
 	}
 }
 
@@ -196,14 +196,14 @@ func uintptrPtr(p *unsafe.Pointer) *uintptr {
 
 //go:uintptrescapes
 func pinUntilRelease(pinned *sync.Mutex, release *sync.Mutex, _ uintptr) {
-	pinned.Unlock() // send "pinned" signal to main thread -->(1)
+	pinned.Unlock() // send "pinned" signal to main thread.
 	release.Lock()  // wait for "release" signal from main thread when
-	//                 Unpin() has been called. <--(2)
+	//                 Unpin() has been called.
 }
 
 //go:uintptrescapes
 func pinUntilRelease2(pinned *sync.Mutex, release *sync.RWMutex, _ uintptr) {
-	pinned.Unlock() // send "pinned" signal to main thread -->(1)
+	pinned.Unlock() // send "pinned" signal to main thread.
 	release.RLock() // wait for "release" broadcast from main thread when
-	//                 clear() has been called. <--(2)
+	//                 unpin() has been called.
 }
