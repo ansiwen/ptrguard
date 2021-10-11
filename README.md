@@ -1,4 +1,6 @@
 # PtrGuard
+[![Build Status](https://github.com/ansiwen/ptrguard/actions/workflows/go.yml/badge.svg)](https://github.com/ansiwen/ptrguard/actions)
+
 PtrGuard is a small Go package that allows to pin a Go pointer (that is pointing
 to memory allocated by the Go runtime) so that it will not be touched by the
 garbage collector. This can be either done directly with the `Pin()` function,
