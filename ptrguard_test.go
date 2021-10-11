@@ -3,6 +3,7 @@ package ptrguard_test
 import (
 	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/ansiwen/ptrguard"
@@ -16,25 +17,27 @@ const (
 )
 
 type tracer struct {
-	p unsafe.Pointer
+	p *string
 	b *bool
 }
 
 func newTracer() tracer {
 	var b bool
-	s := make([]int, 1)
+	s := "foobar"
 	runtime.SetFinalizer(&s, func(interface{}) { b = true })
-	return tracer{unsafe.Pointer(&s), &b}
+	return tracer{&s, &b}
 }
 
-func TestPinPoke(t *testing.T) {
+func TestPin(t *testing.T) {
 	tr1 := newTracer()
 	tr2 := newTracer()
 	cPtr := (*unsafe.Pointer)(Malloc(ptrSize))
 	defer Free(unsafe.Pointer(cPtr))
 	func() {
-		defer ptrguard.Pin(tr1.p).Poke(cPtr).Unpin()
-		assert.Equal(t, tr1.p, *cPtr)
+		var p ptrguard.Pinner
+		defer p.Unpin()
+		p.Pin(tr1.p).Store(cPtr)
+		assert.Equal(t, unsafe.Pointer(tr1.p), *cPtr)
 		tr1.p = nil
 		tr2.p = nil
 		runtime.GC()
@@ -44,43 +47,56 @@ func TestPinPoke(t *testing.T) {
 	}()
 	runtime.GC()
 	runtime.GC()
-	assert.True(t, *tr1.b)
+	assert.Eventually(t, func() bool { return *tr1.b == true },
+		5*time.Second, 10*time.Millisecond)
 	assert.Zero(t, *cPtr)
 }
 
-func TestScopePinPoke(t *testing.T) {
+func TestReusePinner(t *testing.T) {
 	tr1 := newTracer()
 	tr2 := newTracer()
 	cPtr := (*unsafe.Pointer)(Malloc(ptrSize))
 	defer Free(unsafe.Pointer(cPtr))
-	ptrguard.Scope(func(pin ptrguard.Pinner) {
-		pin(tr1.p).Poke(cPtr)
-		assert.Equal(t, tr1.p, *cPtr)
-		tr1.p = nil
-		tr2.p = nil
-		runtime.GC()
-		runtime.GC()
-		assert.False(t, *tr1.b)
-		assert.True(t, *tr2.b)
-	})
+	var p ptrguard.Pinner
+	p.Pin(tr1.p).Store(cPtr)
+	assert.Equal(t, unsafe.Pointer(tr1.p), *cPtr)
+	tr1.p = nil
 	runtime.GC()
 	runtime.GC()
-	assert.True(t, *tr1.b)
+	assert.False(t, *tr1.b)
+	p.Unpin()
+	runtime.GC()
+	runtime.GC()
+	assert.Eventually(t, func() bool { return *tr1.b == true },
+		5*time.Second, 10*time.Millisecond)
+	assert.Zero(t, *cPtr)
+	p.Pin(tr2.p).Store(cPtr)
+	assert.Equal(t, unsafe.Pointer(tr2.p), *cPtr)
+	tr2.p = nil
+	runtime.GC()
+	runtime.GC()
+	assert.False(t, *tr2.b)
+	p.Unpin()
+	runtime.GC()
+	runtime.GC()
+	assert.Eventually(t, func() bool { return *tr2.b == true },
+		5*time.Second, 10*time.Millisecond)
 	assert.Zero(t, *cPtr)
 }
 
-func TestMultiPoke(t *testing.T) {
-	goPtr := (unsafe.Pointer)(&[1]byte{})
+func TestMultiStore(t *testing.T) {
+	goPtr := &[1]byte{}
 	cPtrArr := (*[1024]unsafe.Pointer)(Malloc(ptrSize * 1024))
 	defer Free(unsafe.Pointer(&cPtrArr[0]))
 	func() {
-		pp := ptrguard.Pin(goPtr)
-		defer pp.Unpin()
+		var pg ptrguard.Pinner
+		defer pg.Unpin()
+		pp := pg.Pin(goPtr)
 		for i := range cPtrArr {
-			pp.Poke(&cPtrArr[i])
+			pp.Store(&cPtrArr[i])
 		}
 		for i := range cPtrArr {
-			assert.Equal(t, cPtrArr[i], goPtr)
+			assert.Equal(t, cPtrArr[i], unsafe.Pointer(goPtr))
 		}
 	}()
 	for i := range cPtrArr {
@@ -94,8 +110,10 @@ func TestMultiPin(t *testing.T) {
 		trs[i] = newTracer()
 	}
 	func() {
+		var pg ptrguard.Pinner
+		defer pg.Unpin()
 		for i := range trs {
-			defer ptrguard.Pin(trs[i].p).Unpin()
+			pg.Pin(trs[i].p)
 			trs[i].p = nil
 		}
 		runtime.GC()
@@ -106,29 +124,8 @@ func TestMultiPin(t *testing.T) {
 	}()
 	runtime.GC()
 	runtime.GC()
-	for i := range trs {
-		assert.True(t, *trs[i].b)
-	}
-}
-
-func TestScopeMultiPin(t *testing.T) {
-	var trs [1024]tracer
-	for i := range trs {
-		trs[i] = newTracer()
-	}
-	ptrguard.Scope(func(pin ptrguard.Pinner) {
-		for i := range trs {
-			pin(trs[i].p)
-			trs[i].p = nil
-		}
-		runtime.GC()
-		runtime.GC()
-		for i := range trs {
-			assert.False(t, *trs[i].b)
-		}
-	})
-	runtime.GC()
-	runtime.GC()
+	assert.Eventually(t, func() bool { return *trs[len(trs)-1].b == true },
+		5*time.Second, 10*time.Millisecond)
 	for i := range trs {
 		assert.True(t, *trs[i].b)
 	}
@@ -151,55 +148,61 @@ func TestNoCheck(t *testing.T) {
 			})
 		},
 	)
-}
-
-func TestOutOfScopePanics(t *testing.T) {
-	s := fooBar
-	goPtr := (unsafe.Pointer)(&s)
-	var goPtrPtr *unsafe.Pointer
-	var pin ptrguard.Pinner
-	var pp ptrguard.ScopePtr
-	ptrguard.Scope(func(pin_ ptrguard.Pinner) {
-		pin = pin_
-		pp = pin_(goPtr)
-	})
 	assert.Panics(t,
 		func() {
-			pin(goPtr)
+			DummyCCall(goPtrPtr)
 		},
+		"Please run tests with GODEBUG=cgocheck=2",
 	)
-	assert.Panics(t,
+	assert.NotPanics(t,
 		func() {
-			pp.Poke(goPtrPtr)
+			ptrguard.NoCheck(func() {
+				DummyCCall(goPtrPtr)
+			})
 		},
 	)
 }
 
-func TestUnintializedPanics(t *testing.T) {
-	s := fooBar
-	goPtr := (unsafe.Pointer)(&s)
-	var goPtrPtr *unsafe.Pointer
-	var pin ptrguard.Pinner
-	var pp ptrguard.Ptr
-	var spp ptrguard.ScopePtr
-	assert.Panics(t,
+func TestUnintialized(t *testing.T) {
+	var pp ptrguard.Pinner
+	assert.NotPanics(t,
 		func() {
-			pin(goPtr)
-		},
-	)
-	assert.Panics(t,
-		func() {
-			pp.Poke(goPtrPtr)
-		},
-	)
-	assert.Panics(t,
-		func() {
+			pp.Unpin()
 			pp.Unpin()
 		},
 	)
+}
+
+func TestDoubleUnpin(t *testing.T) {
+	s := fooBar
+	var pp ptrguard.Pinner
+	pp.Pin(&s)
+	assert.NotPanics(t,
+		func() {
+			pp.Unpin()
+			pp.Unpin()
+		},
+	)
+}
+
+func TestNonPointerPanics(t *testing.T) {
+	s := []byte("string")
+	var pg ptrguard.Pinner
+	assert.NotPanics(t,
+		func() {
+			pg.Pin(&s)
+			pg.Unpin()
+		},
+	)
+	assert.NotPanics(t,
+		func() {
+			pg.Pin(unsafe.Pointer(&s))
+			pg.Unpin()
+		},
+	)
 	assert.Panics(t,
 		func() {
-			spp.Poke(goPtrPtr)
+			pg.Pin(s)
 		},
 	)
 }
