@@ -1,17 +1,17 @@
 # PtrGuard
 [![Build Status](https://github.com/ansiwen/ptrguard/actions/workflows/go.yml/badge.svg)](https://github.com/ansiwen/ptrguard/actions)
 
-PtrGuard is a small Go package that allows to pin a Go pointer (that is pointing
-to memory allocated by the Go runtime) so that it will not be touched by the
-garbage collector. This can be either done directly with the `Pin()` function,
-in which case the pointer will be pinned, until the `Unpin()` method of the
-returned value is called. Alternatively a `Scope()` can be created, which
-provides a `Pinner` function. In this case the pointer is pinned until the scope
-is left.
+PtrGuard is a small Go package that allows to pin objects referenced by a Go
+pointer (that is pointing to memory allocated by the Go runtime) so that it will
+not be touched by the garbage collector. This is done by creating a `Pinner`
+object that has a `Pin()` method, which accepts a pointer of any type and pins
+the referenced object, until the `Unpin()` method of the same `Pinner` is
+called. A `Pinner` can be used to pin more than one object, in which case
+`Unpin()` releases all the pinned objects of a `Pinner`.
 
-Pinned Go pointers can either be directly stored in C memory with the `Poke()`
-method, or are allowed to be contained in Go memory that is passed to C
-functions, which both usually violates the [pointer passing
+Go pointers to pinned objects can either be directly stored in C memory with the
+`Store()` method, or are allowed to be contained in Go memory that is passed to
+C functions, which both usually violates the [pointer passing
 rules](https://golang.org/cmd/cgo/#hdr-Passing_pointers). In the second case you
 might need the `NoCheck()` helper function to call the C function in a context,
 where the cgocheck debug feature is disabled. This is necessary because PtrGuard
@@ -36,8 +36,6 @@ With PtrGuard both is still possible:
 
 ### Allocating the buffer array in C memory
 
-#### direct API
-
 ```go
 func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 	numberOfBuffers := len(bufferArray)
@@ -47,9 +45,10 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 	iovec := (*[math.MaxInt32]C.struct_iovec)(cPtr)[:numberOfBuffers:numberOfBuffers]
 
 	var n C.ssize_t
+	var pinner ptrguard.Pinner
+	defer pinner.Unpin()
 	for i := range iovec {
-		bufferPtr := unsafe.Pointer(&bufferArray[i][0])
-		defer ptrguard.Pin(bufferPtr).Poke(&iovec[i].iov_base).Unpin()
+		pinner.Pin(&bufferArray[i][0]).Store(&iovec[i].iov_base)
 		iovec[i].iov_len = C.size_t(len(bufferArray[i]))
 	}
 	n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
@@ -57,32 +56,7 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 }
 ```
 
-#### scope API
-
-```go
-func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
-	numberOfBuffers := len(bufferArray)
-
-	cPtr := C.malloc(C.size_t(C.sizeof_struct_iovec * numberOfBuffers))
-	defer C.free(cPtr)
-	iovec := (*[math.MaxInt32]C.struct_iovec)(cPtr)[:numberOfBuffers:numberOfBuffers]
-
-	var n C.ssize_t
-	ptrguard.Scope(func(pin ptrguard.Pinner) {
-		for i := range iovec {
-			bufferPtr := unsafe.Pointer(&bufferArray[i][0])
-			pin(bufferPtr).Poke(&iovec[i].iov_base)
-			iovec[i].iov_len = C.size_t(len(bufferArray[i]))
-		}
-		n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
-	})
-	return int(n)
-}
-```
-
 ### Allocating the buffer array in Go memory
-
-#### direct API
 
 ```go
 func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
@@ -91,38 +65,16 @@ func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
 	iovec := make([]C.struct_iovec, numberOfBuffers)
 
 	var n C.ssize_t
+	var pinner ptrguard.Pinner
+	defer pinner.Unpin()
 	for i := range iovec {
-		bufferPtr := unsafe.Pointer(&bufferArray[i][0])
-		defer ptrguard.Pin(bufferPtr).Unpin()
-		iovec[i].iov_base = bufferPtr
+		bufferPtr := &bufferArray[i][0]
+		pinner.Pin(bufferPtr)
+		iovec[i].iov_base = unsafe.Pointer(bufferPtr)
 		iovec[i].iov_len = C.size_t(len(bufferArray[i]))
 	}
 	ptrguard.NoCheck(func() {
 		n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
-	})
-	return int(n)
-}
-```
-
-#### scope API
-
-```go
-func ReadFileIntoBufferArray(f *os.File, bufferArray [][]byte) int {
-	numberOfBuffers := len(bufferArray)
-
-	iovec := make([]C.struct_iovec, numberOfBuffers)
-
-	var n C.ssize_t
-	ptrguard.Scope(func(pin ptrguard.Pinner) {
-		for i := range iovec {
-			bufferPtr := unsafe.Pointer(&bufferArray[i][0])
-			pin(bufferPtr)
-			iovec[i].iov_base = bufferPtr
-			iovec[i].iov_len = C.size_t(len(bufferArray[i]))
-		}
-		pg.NoCheck(func() {
-			n = C.readv(C.int(f.Fd()), &iovec[0], C.int(numberOfBuffers))
-		})
 	})
 	return int(n)
 }
