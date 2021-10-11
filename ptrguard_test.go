@@ -10,7 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const ptrSize = unsafe.Sizeof(unsafe.Pointer(nil))
+const (
+	ptrSize = unsafe.Sizeof(unsafe.Pointer(nil))
+	fooBar  = "fooBar"
+)
 
 type tracer struct {
 	p unsafe.Pointer
@@ -132,7 +135,7 @@ func TestScopeMultiPin(t *testing.T) {
 }
 
 func TestNoCheck(t *testing.T) {
-	s := "string"
+	s := fooBar
 	goPtr := (unsafe.Pointer)(&s)
 	goPtrPtr := (unsafe.Pointer)(&goPtr)
 	assert.Panics(t,
@@ -151,7 +154,7 @@ func TestNoCheck(t *testing.T) {
 }
 
 func TestOutOfScopePanics(t *testing.T) {
-	s := "string"
+	s := fooBar
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pin ptrguard.Pinner
@@ -173,7 +176,7 @@ func TestOutOfScopePanics(t *testing.T) {
 }
 
 func TestUnintializedPanics(t *testing.T) {
-	s := "string"
+	s := fooBar
 	goPtr := (unsafe.Pointer)(&s)
 	var goPtrPtr *unsafe.Pointer
 	var pin ptrguard.Pinner

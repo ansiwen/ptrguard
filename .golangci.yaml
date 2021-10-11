@@ -1,0 +1,30 @@
+linters:
+  enable-all: true
+  disable:
+    - golint
+    - scopelint
+    - maligned
+    - interfacer
+    - wsl
+    - nlreturn
+    - gochecknoglobals
+    - gci
+    - paralleltest
+
+#linters-settings:
+#  staticcheck:
+#    checks: [ "all" ]
+#  stylecheck:
+#    checks: [ "all" ]
+#  revive:
+#    severity: warning
+#    rules:
+#      - name: exported
+#        severity: warning
+
+issues:
+#  include:
+#   - 
+  exclude-use-default: false
+  exclude:
+    - "G103: Use of unsafe calls should be audited"

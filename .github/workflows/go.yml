@@ -1,0 +1,48 @@
+name: Go
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: [ '1.13', '1.17' ]
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go }}
+
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v2
+      with:
+        # version of golangci-lint to use in form of v1.2 or v1.2.3 or `latest` to use the latest version
+        version: latest
+        # golangci-lint command line arguments
+        #args: # optional, default is
+        # golangci-lint working directory, default is project root
+        #working-directory: # optional
+        # the token is used for fetching patch of a pull request to show only new issues
+        #github-token: # default is ${{ github.token }}
+        # if set to true and the action runs on a pull request - the action outputs only newly found issues
+        #only-new-issues:
+        # if set to true then action uses pre-installed Go
+        skip-go-installation: true
+        # if set to true then the action don't cache or restore ~/go/pkg.
+        #skip-pkg-cache:
+        # if set to true then the action don't cache or restore ~/.cache/go-build.
+        #skip-build-cache:
+
+    - name: Build
+      run: go build -v
+
+    - name: Test
+      run: go test -v
