@@ -1,8 +1,6 @@
 package ptrguard
 
-import (
-	_ "unsafe" // enable go:linkname
-)
+import _ "unsafe" // enable go:linkname
 
 type _dbgVar struct {
 	name  string
