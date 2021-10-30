@@ -1,5 +1,6 @@
 # PtrGuard
 [![Build Status](https://github.com/ansiwen/ptrguard/actions/workflows/go.yml/badge.svg)](https://github.com/ansiwen/ptrguard/actions)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ansiwen/ptrguard.svg)](https://pkg.go.dev/github.com/ansiwen/ptrguard)
 
 PtrGuard is a small Go package that allows to pin objects referenced by a Go
 pointer (that is pointing to memory allocated by the Go runtime) so that it will
