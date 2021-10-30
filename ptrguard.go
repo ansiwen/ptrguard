@@ -26,11 +26,12 @@ type Pinned struct {
 }
 
 // Pin the Go object referenced by pointer and return a Pinned value. The
-// pointer can be a pointer of any type or unsafe.Pointer. The object will not
-// be touched by the garbage collector until the `Unpin()` method is called.
-// Therefore pinned pointers to this object can be directly stored in C memory
-// with the `Store()` method or can be contained in Go memory passed to C
-// functions, which usually violates the pointer passing rules[1].
+// pointer must be a pointer of any type or unsafe.Pointer, otherwise Pin() will
+// panic. The object will not be touched by the garbage collector until the
+// `Unpin()` method is called. Therefore pinned pointers to this object can be
+// directly stored in C memory with the `Store()` method or can be contained in
+// Go memory passed to C functions, which usually violates the pointer passing
+// rules[1].
 //
 // [1] https://golang.org/cmd/cgo/#hdr-Passing_pointers
 func (p *Pinner) Pin(pointer interface{}) *Pinned {
@@ -71,7 +72,8 @@ func (p *Pinner) Unpin() {
 	unpin(p.instance)
 }
 
-// Store a pinned pointer at target.
+// Store a pinned pointer at target. Target must be a pointer to a pointer of
+// any type or a pointer to unsafe.Pointer, otherwise Store() panics.
 func (p *Pinned) Store(target interface{}) {
 	ptrPtr := getPtrPtr(target)
 	*hiddenPtr(ptrPtr) = *hiddenPtr(&p.ptr)
