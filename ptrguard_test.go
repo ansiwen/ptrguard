@@ -185,24 +185,57 @@ func TestDoubleUnpin(t *testing.T) {
 	)
 }
 
-func TestNonPointerPanics(t *testing.T) {
+func TestPinNonPointerPanics(t *testing.T) {
 	s := []byte("string")
 	var pg ptrguard.Pinner
+	defer pg.Unpin()
 	assert.NotPanics(t,
 		func() {
 			pg.Pin(&s)
-			pg.Unpin()
 		},
 	)
 	assert.NotPanics(t,
 		func() {
 			pg.Pin(unsafe.Pointer(&s))
-			pg.Unpin()
 		},
 	)
 	assert.Panics(t,
 		func() {
 			pg.Pin(s)
+		},
+	)
+}
+
+func TestStoreToNonPtrPtrPanics(t *testing.T) {
+	s := []byte("string")
+	var p1 unsafe.Pointer
+	var p2 *byte
+	var i uintptr
+	var pg ptrguard.Pinner
+	defer pg.Unpin()
+	assert.NotPanics(t,
+		func() {
+			pg.Pin(&s).Store(&p1)
+		},
+	)
+	assert.NotPanics(t,
+		func() {
+			pg.Pin(&s).Store(&p2)
+		},
+	)
+	assert.Panics(t,
+		func() {
+			pg.Pin(&s).Store(&i)
+		},
+	)
+	assert.Panics(t,
+		func() {
+			pg.Pin(&s).Store(unsafe.Pointer(&i))
+		},
+	)
+	assert.Panics(t,
+		func() {
+			pg.Pin(&s).Store(i)
 		},
 	)
 }

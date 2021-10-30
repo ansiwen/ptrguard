@@ -47,11 +47,7 @@ func (p *Pinner) Pin(pointer interface{}) *Pinned {
 		p.release.Lock()
 	}
 	data := p.data
-	val := reflect.ValueOf(pointer)
-	if k := val.Kind(); k != reflect.Ptr && k != reflect.UnsafePointer {
-		panic(fmt.Sprintf("%s is not a pointer", val.Type()))
-	}
-	ptr := unsafe.Pointer(val.Pointer())
+	ptr := getPtr(pointer)
 	var pinned sync.Mutex
 	pinned.Lock()
 	// Start a background go routine that lives until Unpin() is called. This
@@ -76,12 +72,10 @@ func (p *Pinner) Unpin() {
 }
 
 // Store a pinned pointer at target.
-func (p *Pinned) Store(target *unsafe.Pointer) {
-	type hiddenPtr [unsafe.Sizeof(unsafe.Pointer(nil))]byte
-	tp := (*hiddenPtr)(unsafe.Pointer(target))
-	pp := (*hiddenPtr)(unsafe.Pointer(&p.ptr))
-	*tp = *pp
-	p.data.add(target)
+func (p *Pinned) Store(target interface{}) {
+	ptrPtr := getPtrPtr(target)
+	*hiddenPtr(ptrPtr) = *hiddenPtr(&p.ptr)
+	p.data.add(ptrPtr)
 }
 
 // NoCheck temporarily disables cgocheck, which allows passing Go memory
@@ -157,6 +151,28 @@ func cgocheckOn() {
 		*cgocheck = cgocheckOld
 	}
 	cgocheckMtx.Unlock()
+}
+
+func getPtr(i interface{}) unsafe.Pointer {
+	val := reflect.ValueOf(i)
+	if k := val.Kind(); k == reflect.Ptr || k == reflect.UnsafePointer {
+		return unsafe.Pointer(val.Pointer())
+	}
+	panic(fmt.Sprintf("%s is not a pointer", val.Type()))
+}
+
+func getPtrPtr(i interface{}) *unsafe.Pointer {
+	val := reflect.ValueOf(i)
+	if k := val.Kind(); k == reflect.Ptr {
+		if k = val.Elem().Kind(); k == reflect.Ptr || k == reflect.UnsafePointer {
+			return (*unsafe.Pointer)(unsafe.Pointer(val.Pointer()))
+		}
+	}
+	panic(fmt.Sprintf("%s is not a pointer to a pointer", val.Type()))
+}
+
+func hiddenPtr(p *unsafe.Pointer) *[unsafe.Sizeof(unsafe.Pointer(nil))]byte {
+	return (*[unsafe.Sizeof(unsafe.Pointer(nil))]byte)(unsafe.Pointer(p))
 }
 
 // From https://golang.org/src/cmd/compile/internal/gc/lex.go:
